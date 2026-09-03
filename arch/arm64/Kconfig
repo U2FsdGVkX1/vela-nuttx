@@ -129,6 +129,23 @@ config ARCH_CHIP_ZYNQ_MPSOC
 	---help---
 		XilinX ZYNQ MPSOC
 
+config ARCH_CHIP_S6
+	bool "Amlogic Meson S6"
+	select ARCH_CORTEX_A55
+	select ARCH_HAVE_ADDRENV
+	select ARCH_HAVE_RESET
+	select ARCH_HAVE_IRQTRIGGER
+	select ARCH_NEED_ADDRENV_MAPPING
+	select ARCH_USE_MMU
+	select ARMV8A_HAVE_GICv3
+	select ARM64_HAVE_PSCI
+	select ARCH_HAVE_IRQPRIO
+	select ARCH_HAVE_LOWPUTC
+	---help---
+		Amlogic Meson S6 platform with Cortex-A55 CPUs and GICv3.
+		The initial port relies on BL31/U-Boot for DDR, clock and pinmux
+		initialization and brings up the UART-B console only.
+
 config ARCH_CHIP_ARM64_CUSTOM
 	bool "Custom ARM64 chip"
 	select ARCH_CHIP_CUSTOM
@@ -354,6 +371,7 @@ config ARCH_CHIP
 	default "vdk"       if ARCH_CHIP_VDK
 	default "imx8"      if ARCH_CHIP_IMX8
 	default "imx9"      if ARCH_CHIP_IMX9
+	default "s6"        if ARCH_CHIP_S6
 
 config ARM64_HAVE_PSCI
 	bool "ARM PCSI (Power State Coordination Interface) Support"
@@ -539,6 +557,10 @@ endif
 
 if ARCH_CHIP_ZYNQ_MPSOC
 source "arch/arm64/src/zynq-mpsoc/Kconfig"
+endif
+
+if ARCH_CHIP_S6
+source "arch/arm64/src/s6/Kconfig"
 endif
 
 endif # ARCH_ARM64

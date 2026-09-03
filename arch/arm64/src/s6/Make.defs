@@ -1,0 +1,14 @@
+############################################################################
+# arch/arm64/src/s6/Make.defs
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+############################################################################
+
+include common/Make.defs
+
+CHIP_CSRCS  = s6_boot.c
+
+ifeq ($(CONFIG_ARCH_EARLY_PRINT),y)
+CHIP_ASRCS  = s6_lowputc.S
+endif
