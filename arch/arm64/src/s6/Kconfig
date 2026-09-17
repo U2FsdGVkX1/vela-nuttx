@@ -6,9 +6,21 @@ if ARCH_CHIP_S6
 
 menu "Amlogic Meson S6 Peripheral Selection"
 
+config S6_UART
+	bool "Amlogic Meson UART"
+	default y
+	select UART0_SERIALDRIVER
+	select ARCH_HAVE_SERIAL_TERMIOS
+	---help---
+		Enable the Meson S6 UART-B lower-half and console support.
+
 config S6_UART0_BASE
 	hex "S6 UART-B base address"
 	default 0xfe07a000
+
+config S6_UART0_IRQ
+	int "S6 UART-B IRQ"
+	default 201
 
 endmenu # Amlogic Meson S6 Peripheral Selection
 

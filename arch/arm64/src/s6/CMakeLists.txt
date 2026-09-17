@@ -5,7 +5,7 @@
 #
 # ##############################################################################
 
-set(SRCS s6_boot.c)
+set(SRCS s6_boot.c s6_serial.c)
 
 if(CONFIG_ARCH_EARLY_PRINT)
   list(APPEND SRCS s6_lowputc.S)
