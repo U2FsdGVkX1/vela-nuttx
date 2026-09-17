@@ -16,3 +16,7 @@ endif
 ifeq ($(CONFIG_S6_MIPI_DSI),y)
 CHIP_CSRCS += s6_mipi_dsi.c
 endif
+
+ifeq ($(CONFIG_S6_GPIO),y)
+CHIP_CSRCS += s6_gpio.c
+endif

@@ -51,6 +51,14 @@ config S6_FB_HEIGHT
 		Native vertical resolution of the panel that U-Boot
 		programmed.  The framebuffer is 1:1, no scaling.
 
+config S6_GPIO
+	bool "Amlogic Meson GPIO and GPIO interrupt controller"
+	default n
+	---help---
+		Enable minimal GPIO support for the periphs GPIOA bank and
+		the GPIO interrupt controller (12 channels mapped to GIC
+		SPIs 10-21).
+
 endmenu # Amlogic Meson S6 Peripheral Selection
 
 endif # ARCH_CHIP_S6

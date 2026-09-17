@@ -15,4 +15,8 @@ if(CONFIG_S6_MIPI_DSI)
   list(APPEND SRCS s6_mipi_dsi.c)
 endif()
 
+if(CONFIG_S6_GPIO)
+  list(APPEND SRCS s6_gpio.c)
+endif()
+
 target_sources(arch PRIVATE ${SRCS})
