@@ -22,6 +22,35 @@ config S6_UART0_IRQ
 	int "S6 UART-B IRQ"
 	default 201
 
+config S6_MIPI_DSI
+	bool "MIPI DSI display (U-Boot initialized)"
+	depends on VIDEO_FB
+	select FB_UPDATE
+	---help---
+		Enable the Meson S6 MIPI DSI lower-half.  U-Boot performs the
+		display bring-up (panel power, DSI host, D-PHY, VENC timing)
+		before booting NuttX, so this driver only re-points the OSD1
+		plane at a NuttX-owned framebuffer and registers /dev/fb0.
+		The DSI link itself is never re-initialized.
+
+config S6_FB_WIDTH
+	int "Panel width in pixels"
+	depends on S6_MIPI_DSI
+	range 1 4096
+	default 1080
+	---help---
+		Native horizontal resolution of the panel that U-Boot
+		programmed.  The framebuffer is 1:1, no scaling.
+
+config S6_FB_HEIGHT
+	int "Panel height in pixels"
+	depends on S6_MIPI_DSI
+	range 1 4096
+	default 1920
+	---help---
+		Native vertical resolution of the panel that U-Boot
+		programmed.  The framebuffer is 1:1, no scaling.
+
 endmenu # Amlogic Meson S6 Peripheral Selection
 
 endif # ARCH_CHIP_S6

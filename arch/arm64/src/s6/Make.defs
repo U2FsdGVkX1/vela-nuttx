@@ -12,3 +12,7 @@ CHIP_CSRCS  = s6_boot.c s6_serial.c
 ifeq ($(CONFIG_ARCH_EARLY_PRINT),y)
 CHIP_ASRCS  = s6_lowputc.S
 endif
+
+ifeq ($(CONFIG_S6_MIPI_DSI),y)
+CHIP_CSRCS += s6_mipi_dsi.c
+endif
