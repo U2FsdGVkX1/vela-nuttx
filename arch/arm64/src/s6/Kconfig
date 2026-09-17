@@ -59,6 +59,27 @@ config S6_GPIO
 		the GPIO interrupt controller (12 channels mapped to GIC
 		SPIs 10-21).
 
+config S6_I2C
+	bool "Amlogic Meson I2C master"
+	default n
+	select I2C
+	---help---
+		Enable the Meson S6 I2C master lower-half.  The transfer engine
+		is polled; no controller interrupt is used.
+
+config S6_I2C0_BASE
+	hex "S6 I2C0 base address"
+	depends on S6_I2C
+	default 0xfe066000
+
+config S6_I2C_CLK_HZ
+	int "sys_clk frequency feeding the I2C dividers (Hz)"
+	depends on S6_I2C
+	default 167000000
+	---help---
+		The I2C masters are clocked from sys_clk whose rate is
+		installed by BL31.
+
 endmenu # Amlogic Meson S6 Peripheral Selection
 
 endif # ARCH_CHIP_S6

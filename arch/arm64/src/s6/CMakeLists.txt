@@ -19,4 +19,8 @@ if(CONFIG_S6_GPIO)
   list(APPEND SRCS s6_gpio.c)
 endif()
 
+if(CONFIG_S6_I2C)
+  list(APPEND SRCS s6_i2c.c)
+endif()
+
 target_sources(arch PRIVATE ${SRCS})

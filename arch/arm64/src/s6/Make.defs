@@ -20,3 +20,7 @@ endif
 ifeq ($(CONFIG_S6_GPIO),y)
 CHIP_CSRCS += s6_gpio.c
 endif
+
+ifeq ($(CONFIG_S6_I2C),y)
+CHIP_CSRCS += s6_i2c.c
+endif
