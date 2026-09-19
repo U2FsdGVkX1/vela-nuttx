@@ -109,6 +109,7 @@ static int gt9xx_open(FAR struct file *filep);
 static int gt9xx_close(FAR struct file *filep);
 static ssize_t gt9xx_read(FAR struct file *filep, FAR char *buffer,
                           size_t buflen);
+static int gt9xx_ioctl(FAR struct file *filep, int cmd, unsigned long arg);
 static int gt9xx_poll(FAR struct file *filep, FAR struct pollfd *fds,
                       bool setup);
 
@@ -125,7 +126,7 @@ static const struct file_operations g_gt9xx_fileops =
   gt9xx_read,   /* read */
   NULL,         /* write */
   NULL,         /* seek */
-  NULL,         /* ioctl */
+  gt9xx_ioctl,  /* ioctl */
   NULL,         /* truncate */
   NULL,         /* mmap */
   gt9xx_poll,   /* poll */
@@ -734,6 +735,46 @@ static int gt9xx_close(FAR struct file *filep)
 
   nxmutex_unlock(&priv->devlock);
   return OK;
+}
+
+/****************************************************************************
+ * Name: gt9xx_ioctl
+ *
+ * Description:
+ *   Handle Touch Panel specific commands.
+ *
+ * Input Parameters:
+ *   filep - File Struct for Touch Panel
+ *   cmd   - The ioctl command
+ *   arg   - The ioctl argument
+ *
+ * Returned Value:
+ *   Zero (OK) on success; a negated errno value is returned on any failure.
+ *
+ ****************************************************************************/
+
+static int gt9xx_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
+{
+  UNUSED(filep);
+
+  switch (cmd)
+    {
+      case TSIOC_GETMAXPOINTS:
+        {
+          FAR uint8_t *maxpoints = (FAR uint8_t *)(uintptr_t)arg;
+
+          if (maxpoints == NULL)
+            {
+              return -EINVAL;
+            }
+
+          *maxpoints = 1;
+          return OK;
+        }
+
+      default:
+        return -ENOTTY;
+    }
 }
 
 /****************************************************************************
