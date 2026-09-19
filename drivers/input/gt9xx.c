@@ -92,9 +92,9 @@ struct gt9xx_dev_s
   mutex_t devlock;  /* Mutex to prevent concurrent reads */
   uint8_t cref;     /* Reference Counter for device */
   bool int_pending; /* True if a Touch Interrupt is pending processing */
+  bool touched;     /* True if a Touch Down has been reported */
   uint16_t x;       /* X Coordinate of Last Touch Point */
   uint16_t y;       /* Y Coordinate of Last Touch Point */
-  uint8_t flags;    /* Touch Up or Touch Down for Last Touch Point */
 
   /* Poll Waiters for device */
 
@@ -379,7 +379,8 @@ static int gt9xx_set_status(FAR struct gt9xx_dev_s *dev, uint8_t status)
  *   sample - Returned Touch Sample (0 or 1 Touch Points)
  *
  * Returned Value:
- *   Zero (OK) on success; a negated errno value is returned on any failure.
+ *   Zero (OK) on success; -EAGAIN if data is not ready; or another negated
+ *   errno value on failure.
  *
  ****************************************************************************/
 
@@ -433,15 +434,18 @@ static int gt9xx_read_touch_data(FAR struct gt9xx_dev_s *dev,
       x = touch[0] + (touch[1] << 8);
       y = touch[2] + (touch[3] << 8);
 
-      /* Return the Touch Coordinates as Touch Down */
+      /* Return the Touch Coordinates */
 
-      flags = TOUCH_DOWN | TOUCH_ID_VALID | TOUCH_POS_VALID;
+      flags = TOUCH_ID_VALID | TOUCH_POS_VALID;
       sample->npoints = 1;
       sample->point[0].id = 0;
       sample->point[0].x = x;
       sample->point[0].y = y;
       sample->point[0].flags = flags;
-      iinfo("touch down x=%d, y=%d\n", x, y);
+    }
+  else if (status_code == 0)
+    {
+      return -EAGAIN;
     }
 
   /* Set the Touch Panel Status to 0 */
@@ -469,7 +473,8 @@ static int gt9xx_read_touch_data(FAR struct gt9xx_dev_s *dev,
  *   buflen - Size of buffer
  *
  * Returned Value:
- *   Zero (OK) on success; a negated errno value is returned on any failure.
+ *   The number of bytes read on success; -EAGAIN if no touch event is
+ *   available; or another negated errno value on failure.
  *
  ****************************************************************************/
 
@@ -481,6 +486,7 @@ static ssize_t gt9xx_read(FAR struct file *filep, FAR char *buffer,
   struct touch_sample_s sample;
   const size_t outlen = sizeof(sample);
   irqstate_t flags;
+  bool pending;
   int ret;
 
   /* Returned Touch Sample will have 0 or 1 Touch Points */
@@ -507,83 +513,61 @@ static ssize_t gt9xx_read(FAR struct file *filep, FAR char *buffer,
       return ret;
     }
 
-  ret = -EINVAL;
+  /* Consume the pending interrupt before reading the controller.  An
+   * interrupt arriving during the I2C transfers will remain pending.
+   */
 
-  /* If waiting for Touch Up, return the Last Touch Point as Touch Up */
+  flags = enter_critical_section();
+  pending = priv->int_pending;
+  priv->int_pending = false;
+  leave_critical_section(flags);
 
-  if (priv->flags & TOUCH_DOWN)
+  ret = gt9xx_read_touch_data(priv, &sample);
+  if (ret < 0)
     {
-      /* Begin Critical Section */
+      if (ret != -EAGAIN && pending)
+        {
+          flags = enter_critical_section();
+          priv->int_pending = true;
+          leave_critical_section(flags);
+          poll_notify(priv->fds, CONFIG_INPUT_GT9XX_NPOLLWAITERS, POLLIN);
+        }
 
-      flags = enter_critical_section();
+      goto out;
+    }
 
-      /* Mark the Last Touch Point as Touch Up */
-
-      priv->flags = TOUCH_UP | TOUCH_ID_VALID | TOUCH_POS_VALID;
-
-      /* End Critical Section */
-
-      leave_critical_section(flags);
-
-      /* Return the Last Touch Point, changed to Touch Up */
-
-      memset(&sample, 0, sizeof(sample));
+  if (sample.npoints >= 1)
+    {
+      sample.point[0].flags |= priv->touched ? TOUCH_MOVE : TOUCH_DOWN;
+      priv->touched = true;
+      priv->x = sample.point[0].x;
+      priv->y = sample.point[0].y;
+      iinfo("touch %s x=%d, y=%d\n",
+            (sample.point[0].flags & TOUCH_MOVE) != 0 ? "move" : "down",
+            priv->x, priv->y);
+    }
+  else if (priv->touched)
+    {
       sample.npoints = 1;
       sample.point[0].id = 0;
       sample.point[0].x = priv->x;
       sample.point[0].y = priv->y;
-      sample.point[0].flags = priv->flags;
-      memcpy(buffer, &sample, sizeof(sample));
-      ret = OK;
+      sample.point[0].flags = TOUCH_UP | TOUCH_ID_VALID | TOUCH_POS_VALID;
+      priv->touched = false;
       iinfo("touch up x=%d, y=%d\n", priv->x, priv->y);
     }
   else
     {
-      /* Otherwise read the Touch Point over I2C */
-
-      ret = gt9xx_read_touch_data(priv, &sample);
-
-      /* Skip duplicates */
-
-      if (sample.npoints >= 1 &&
-          priv->x == sample.point[0].x &&
-          priv->y == sample.point[0].y)
-        {
-          memset(&sample, 0, sizeof(sample));
-          sample.npoints = 0;
-          iinfo("skip duplicate x=%d, y=%d\n", priv->x, priv->y);
-        }
-
-      /* Return the Touch Point */
-
-      memcpy(buffer, &sample, sizeof(sample));
-
-      /* Begin Critical Section */
-
-      flags = enter_critical_section();
-
-      /* Clear the Interrupt Pending Flag */
-
-      priv->int_pending = false;
-
-      /* Remember the Last Touch Point */
-
-      if (sample.npoints >= 1)
-        {
-          priv->x = sample.point[0].x;
-          priv->y = sample.point[0].y;
-          priv->flags = sample.point[0].flags;
-        }
-
-      /* End Critical Section */
-
-      leave_critical_section(flags);
+      ret = -EAGAIN;
+      goto out;
     }
 
-  /* End Mutex: Unlock to allow next read */
+  memcpy(buffer, &sample, sizeof(sample));
+  ret = outlen;
 
+out:
   nxmutex_unlock(&priv->devlock);
-  return (ret < 0) ? ret : outlen;
+  return ret;
 }
 
 /****************************************************************************
@@ -654,6 +638,9 @@ static int gt9xx_open(FAR struct file *filep)
           priv->board->set_power(priv->board, false);
           goto out_lock;
         }
+
+      priv->int_pending = false;
+      priv->touched = false;
 
       /* Enable Touch Panel Interrupts */
 
