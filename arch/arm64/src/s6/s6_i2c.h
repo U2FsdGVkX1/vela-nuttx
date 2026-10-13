@@ -35,7 +35,6 @@ extern "C"
  *
  * Description:
  *   Initialize the S6 I2C master (i2c0) and return its bus interface.
- *   The transfer engine is polled; no controller interrupt is used.
  *
  * Returned Value:
  *   The I2C0 master instance.

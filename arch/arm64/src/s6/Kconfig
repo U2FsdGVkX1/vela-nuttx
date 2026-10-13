@@ -64,13 +64,17 @@ config S6_I2C
 	default n
 	select I2C
 	---help---
-		Enable the Meson S6 I2C master lower-half.  The transfer engine
-		is polled; no controller interrupt is used.
+		Enable the Meson S6 I2C master lower-half.
 
 config S6_I2C0_BASE
 	hex "S6 I2C0 base address"
 	depends on S6_I2C
 	default 0xfe066000
+
+config S6_I2C0_IRQ
+	int "S6 I2C0 IRQ"
+	depends on S6_I2C
+	default 192
 
 config S6_I2C_CLK_HZ
 	int "sys_clk frequency feeding the I2C dividers (Hz)"

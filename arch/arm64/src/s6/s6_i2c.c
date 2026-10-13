@@ -18,7 +18,9 @@
 #include <arch/chip/chip.h>
 #include <debug.h>
 #include <nuttx/arch.h>
+#include <nuttx/irq.h>
 #include <nuttx/mutex.h>
+#include <nuttx/semaphore.h>
 
 #include "arm64_internal.h"
 #include "s6_i2c.h"
@@ -33,9 +35,6 @@
 /* Timeout for a single token chunk */
 
 #define S6_I2C_TIMEOUT_MS         500
-#define S6_I2C_POLL_DELAY_US      50
-#define S6_I2C_POLL_COUNT \
-  (S6_I2C_TIMEOUT_MS * 1000 / S6_I2C_POLL_DELAY_US)
 
 /* Data bytes per token chunk (RDATA/WDATA registers hold 8 bytes) */
 
@@ -55,6 +54,7 @@ struct s6_i2c_dev_s
   uintptr_t base;             /* Controller base address */
   uint32_t frequency;         /* Configured bus frequency */
   mutex_t  lock;              /* Serialize transfers on the bus */
+  sem_t    done;              /* Posted when a token chunk completes */
 };
 
 /****************************************************************************
@@ -81,7 +81,8 @@ static struct s6_i2c_dev_s g_s6_i2c0 =
     },
   .base      = CONFIG_S6_I2C0_BASE,
   .frequency = 0,
-  .lock      = NXMUTEX_INITIALIZER
+  .lock      = NXMUTEX_INITIALIZER,
+  .done      = SEM_INITIALIZER(0)
 };
 
 /****************************************************************************
@@ -213,19 +214,36 @@ static void s6_i2c_get_data(FAR struct s6_i2c_dev_s *priv,
 }
 
 /****************************************************************************
+ * Name: s6_i2c_interrupt
+ *
+ * Description:
+ *   The controller raises its interrupt when a token list has run, either
+ *   to the end or up to a NAK.  Wake up the waiting transfer.
+ *
+ ****************************************************************************/
+
+static int s6_i2c_interrupt(int irq, FAR void *context, FAR void *arg)
+{
+  FAR struct s6_i2c_dev_s *priv = arg;
+
+  nxsem_post(&priv->done);
+  return OK;
+}
+
+/****************************************************************************
  * Name: s6_i2c_run_tokens
  *
  * Description:
- *   Write the token list, run it on the 0 -> 1 edge of START and poll until
- *   the controller finishes.  Returns -ENXIO on a NAK and -ETIMEDOUT when a
- *   chunk does not complete in time (aborting the controller).
+ *   Write the token list, run it on the 0 -> 1 edge of START and wait for
+ *   the completion interrupt.  Returns -ENXIO on a NAK and -ETIMEDOUT when
+ *   a chunk does not complete in time (aborting the controller).
  *
  ****************************************************************************/
 
 static int s6_i2c_run_tokens(FAR struct s6_i2c_dev_s *priv, uint64_t tokens)
 {
-  uint32_t timeout = S6_I2C_POLL_COUNT;
   uint32_t ctrl;
+  int ret;
 
   putreg32((uint32_t)tokens, priv->base + S6_I2C_TOK_LIST0_OFFSET);
   putreg32((uint32_t)(tokens >> 32), priv->base + S6_I2C_TOK_LIST1_OFFSET);
@@ -236,36 +254,39 @@ static int s6_i2c_run_tokens(FAR struct s6_i2c_dev_s *priv, uint64_t tokens)
   modifyreg32(priv->base + S6_I2C_CTRL_OFFSET,
               S6_I2C_CTRL_START, S6_I2C_CTRL_START);
 
-  for (;;)
+  /* A wakeup with the controller still busy comes from a late interrupt
+   * of an earlier timed-out chunk, so keep waiting.
+   */
+
+  do
     {
-      ctrl = getreg32(priv->base + S6_I2C_CTRL_OFFSET);
-      if ((ctrl & S6_I2C_CTRL_STATUS) == 0)
-        {
-          /* The controller is idle; the same read tells a NAK from a
-           * clean completion.
-           */
-
-          if ((ctrl & S6_I2C_CTRL_ERROR) != 0)
-            {
-              ierr("NAK\n");
-              return -ENXIO;
-            }
-
-          return OK;
-        }
-
-      if (--timeout == 0)
+      ret = nxsem_tickwait_uninterruptible(&priv->done,
+                                           MSEC2TICK(S6_I2C_TIMEOUT_MS));
+      if (ret < 0)
         {
           /* Abort anything left running */
 
           modifyreg32(priv->base + S6_I2C_CTRL_OFFSET,
                       S6_I2C_CTRL_START, 0);
           ierr("transfer timeout\n");
-          return -ETIMEDOUT;
+          return ret;
         }
 
-      up_udelay(S6_I2C_POLL_DELAY_US);
+      ctrl = getreg32(priv->base + S6_I2C_CTRL_OFFSET);
     }
+  while ((ctrl & S6_I2C_CTRL_STATUS) != 0);
+
+  /* The controller is idle; the same read tells a NAK from a clean
+   * completion.
+   */
+
+  if ((ctrl & S6_I2C_CTRL_ERROR) != 0)
+    {
+      ierr("NAK\n");
+      return -ENXIO;
+    }
+
+  return OK;
 }
 
 /****************************************************************************
@@ -461,7 +482,6 @@ static int s6_i2c_transfer(struct i2c_master_s *dev,
  *
  * Description:
  *   Initialize the S6 I2C master (i2c0) and return its bus interface.
- *   The transfer engine is polled; no controller interrupt is used.
  *
  * Returned Value:
  *   The I2C0 master instance.
@@ -483,6 +503,12 @@ FAR struct i2c_master_s *s6_i2cbus_initialize(void)
 
   s6_i2c_set_clk_div(priv, I2C_SPEED_STANDARD);
   priv->frequency = I2C_SPEED_STANDARD;
+
+  /* The completion interrupt is edge-triggered on S6 */
+
+  irq_attach(CONFIG_S6_I2C0_IRQ, s6_i2c_interrupt, priv);
+  up_set_irq_type(CONFIG_S6_I2C0_IRQ, IRQ_RISING_EDGE);
+  up_enable_irq(CONFIG_S6_I2C0_IRQ);
 
   iinfo("base %08lx\n", (unsigned long)priv->base);
   return &priv->dev;
