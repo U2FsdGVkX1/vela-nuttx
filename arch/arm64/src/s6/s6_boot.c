@@ -88,3 +88,15 @@ void arm64_chip_boot(void)
   arm64_earlyserialinit();
 #endif
 }
+
+#ifdef CONFIG_ARCH_HAVE_MULTICPU
+uint64_t arm64_get_mpid(int cpu)
+{
+  return CORE_TO_MPID(cpu, 1);
+}
+
+int arm64_get_cpuid(uint64_t mpid)
+{
+  return MPID_TO_CORE(mpid);
+}
+#endif
