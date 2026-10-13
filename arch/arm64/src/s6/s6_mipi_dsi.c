@@ -10,6 +10,10 @@
  * U-Boot initializes the whole display pipeline (panel, DSI, VENC) and
  * leaves OSD1 running.  This driver inherits that pipeline, re-points
  * OSD1 at a NuttX-owned framebuffer and provides the framebuffer lower-half.
+ *
+ * OSD1 fetches from DDR without snooping the CPU caches.  Clients draw into
+ * a cached shadow buffer and updatearea copies finished rows to the buffer
+ * OSD1 scans out, so partially drawn frames never reach the panel.
  */
 
 /****************************************************************************
@@ -53,7 +57,8 @@
 struct s6_dsi_fb_s
 {
   struct fb_vtable_s vtable;  /* vtable is the first member */
-  FAR void *fbmem;            /* Allocated framebuffer */
+  FAR uint8_t *fbmem;         /* Shadow buffer drawn by clients */
+  FAR uint8_t *scanout;       /* Buffer fetched by OSD1 */
 };
 
 /****************************************************************************
@@ -160,17 +165,15 @@ static int s6_dsi_setpower(FAR struct fb_vtable_s *vtable, int power)
   return OK;
 }
 
-/* The OSD fetches from DDR without snooping the CPU caches; flush the
- * dirty rows.
- */
+/* Copy the dirty rows to the scanout buffer and push them out of cache */
 
 static int s6_dsi_updatearea(FAR struct fb_vtable_s *vtable,
                              FAR const struct fb_area_s *area)
 {
   FAR struct s6_dsi_fb_s *priv = (FAR struct s6_dsi_fb_s *)vtable;
-  uintptr_t start;
-  uintptr_t end;
   unsigned int endrow;
+  size_t start;
+  size_t len;
 
   DEBUGASSERT(vtable != NULL && area != NULL);
 
@@ -191,9 +194,11 @@ static int s6_dsi_updatearea(FAR struct fb_vtable_s *vtable,
       endrow = S6_FB_HEIGHT;
     }
 
-  start = (uintptr_t)priv->fbmem + area->y * S6_FB_STRIDE;
-  end   = (uintptr_t)priv->fbmem + endrow * S6_FB_STRIDE;
-  up_clean_dcache(start, end);
+  start = area->y * S6_FB_STRIDE;
+  len   = (endrow - area->y) * S6_FB_STRIDE;
+  memcpy(priv->scanout + start, priv->fbmem + start, len);
+  up_clean_dcache((uintptr_t)priv->scanout + start,
+                  (uintptr_t)priv->scanout + start + len);
   return OK;
 }
 
@@ -215,18 +220,20 @@ int up_fbinitialize(int display)
       return OK;
     }
 
-  priv->fbmem = kmm_memalign(S6_FB_ALIGN, S6_FB_LEN);
+  priv->fbmem = kmm_memalign(S6_FB_ALIGN, 2 * S6_FB_LEN);
   if (priv->fbmem == NULL)
     {
-      gerr("ERROR: Failed to allocate %d byte framebuffer\n", S6_FB_LEN);
+      gerr("ERROR: Failed to allocate %d byte framebuffer\n",
+           2 * S6_FB_LEN);
       return -ENOMEM;
     }
 
-  memset(priv->fbmem, 0, S6_FB_LEN);
-  up_clean_dcache((uintptr_t)priv->fbmem,
-                  (uintptr_t)priv->fbmem + S6_FB_LEN);
+  priv->scanout = priv->fbmem + S6_FB_LEN;
+  memset(priv->fbmem, 0, 2 * S6_FB_LEN);
+  up_clean_dcache((uintptr_t)priv->scanout,
+                  (uintptr_t)priv->scanout + S6_FB_LEN);
 
-  s6_dsi_osd_program((uintptr_t)priv->fbmem);
+  s6_dsi_osd_program((uintptr_t)priv->scanout);
 
   ginfo("fb0: %dx%d RGB565 at %p\n",
         S6_FB_WIDTH, S6_FB_HEIGHT, priv->fbmem);
