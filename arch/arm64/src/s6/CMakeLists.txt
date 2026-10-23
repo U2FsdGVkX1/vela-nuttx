@@ -23,4 +23,8 @@ if(CONFIG_S6_I2C)
   list(APPEND SRCS s6_i2c.c)
 endif()
 
+if(CONFIG_S6_ETH)
+  list(APPEND SRCS s6_eth.c)
+endif()
+
 target_sources(arch PRIVATE ${SRCS})

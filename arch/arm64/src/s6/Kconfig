@@ -84,6 +84,21 @@ config S6_I2C_CLK_HZ
 		The I2C masters are clocked from sys_clk whose rate is
 		installed by BL31.
 
+config S6_ETH
+	bool "Ethernet MAC (U-Boot initialized)"
+	default n
+	depends on NET
+	select NET_ETHERNET
+	select ARCH_HAVE_NETDEV_STATISTICS
+	select NETDEV_LATEINIT
+	select SCHED_LPWORK
+	---help---
+		Enable the Meson S6 DWMAC Ethernet MAC with the external
+		RTL8211F PHY on RGMII.  U-Boot must have used the port (e.g.
+		tftpboot) so that the clocks, pin mux, PHY reset and RGMII
+		delays are set up.  The link is limited to 100M.  The board
+		registers eth0 by calling s6_eth_initialize().
+
 endmenu # Amlogic Meson S6 Peripheral Selection
 
 endif # ARCH_CHIP_S6

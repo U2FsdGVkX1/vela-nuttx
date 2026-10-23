@@ -21,6 +21,11 @@
  * Private Data
  ****************************************************************************/
 
+/* DMA memory set aside by the linker script */
+
+extern uint8_t _snoncache[];
+extern uint8_t _sznoncache[];
+
 static const struct arm_mmu_region g_mmu_regions[] =
 {
   MMU_REGION_FLAT_ENTRY("S6_DEVICE_REGION",
@@ -32,6 +37,11 @@ static const struct arm_mmu_region g_mmu_regions[] =
                         CONFIG_RAMBANK1_ADDR,
                         CONFIG_RAMBANK1_SIZE,
                         MT_NORMAL | MT_RW | MT_SECURE),
+
+  MMU_REGION_FLAT_ENTRY("S6_NONCACHE_REGION",
+                        (uint64_t)_snoncache,
+                        (uint64_t)_sznoncache,
+                        MT_NORMAL_NC | MT_RW | MT_SECURE),
 };
 
 /****************************************************************************

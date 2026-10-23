@@ -24,3 +24,7 @@ endif
 ifeq ($(CONFIG_S6_I2C),y)
 CHIP_CSRCS += s6_i2c.c
 endif
+
+ifeq ($(CONFIG_S6_ETH),y)
+CHIP_CSRCS += s6_eth.c
+endif
