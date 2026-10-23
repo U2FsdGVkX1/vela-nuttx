@@ -30,8 +30,10 @@
  ****************************************************************************/
 
 #include <nuttx/config.h>
+#include <sys/param.h>
 #include <sys/types.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include <poll.h>
@@ -64,11 +66,20 @@
 #  define CONFIG_INPUT_GT9XX_NPOLLWAITERS 1
 #endif
 
+/* Default Number of Touch Points is 5 */
+
+#ifndef CONFIG_INPUT_GT9XX_NPOINTS
+#  define CONFIG_INPUT_GT9XX_NPOINTS 5
+#endif
+
 /* I2C Registers for Goodix GT9XX Touch Panel */
 
 #define GTP_REG_VERSION    0x8140  /* Product ID */
 #define GTP_READ_COOR_ADDR 0x814e  /* Touch Panel Status */
-#define GTP_POINT1         0x8150  /* Touch Point 1 */
+#define GTP_POINT1         0x814f  /* Touch Point 1: Track ID, X, Y, Size */
+
+#define GTP_POINT_SIZE     8       /* Bytes per Touch Point */
+#define GTP_MAX_TRACK      16      /* Track IDs are 0 to 15 */
 
 /****************************************************************************
  * Private Types
@@ -92,9 +103,12 @@ struct gt9xx_dev_s
   mutex_t devlock;  /* Mutex to prevent concurrent reads */
   uint8_t cref;     /* Reference Counter for device */
   bool int_pending; /* True if a Touch Interrupt is pending processing */
-  bool touched;     /* True if a Touch Down has been reported */
-  uint16_t x;       /* X Coordinate of Last Touch Point */
-  uint16_t y;       /* Y Coordinate of Last Touch Point */
+  uint16_t down;    /* Bit per Track ID with a Touch Down reported */
+
+  /* Last Coordinates per Track ID, for the Touch Up */
+
+  uint16_t x[GTP_MAX_TRACK];
+  uint16_t y[GTP_MAX_TRACK];
 
   /* Poll Waiters for device */
 
@@ -371,12 +385,14 @@ static int gt9xx_set_status(FAR struct gt9xx_dev_s *dev, uint8_t status)
  * Name: gt9xx_read_touch_data
  *
  * Description:
- *   Read a Touch Sample from Touch Panel. Returns either 0 or 1
- *   Touch Points.
+ *   Read a Touch Sample from Touch Panel.  The sample has a Touch Down or
+ *   Touch Move point for every contact on the panel, then a Touch Up point
+ *   for every contact that is gone, at most maxpoints in all.
  *
  * Input Parameters:
- *   dev    - Touch Panel Device
- *   sample - Returned Touch Sample (0 or 1 Touch Points)
+ *   dev       - Touch Panel Device
+ *   sample    - Returned Touch Sample
+ *   maxpoints - Room for Touch Points in sample
  *
  * Returned Value:
  *   Zero (OK) on success; -EAGAIN if data is not ready; or another negated
@@ -385,22 +401,24 @@ static int gt9xx_set_status(FAR struct gt9xx_dev_s *dev, uint8_t status)
  ****************************************************************************/
 
 static int gt9xx_read_touch_data(FAR struct gt9xx_dev_s *dev,
-                                 FAR struct touch_sample_s *sample)
+                                 FAR struct touch_sample_s *sample,
+                                 int maxpoints)
 {
+  uint8_t touch[CONFIG_INPUT_GT9XX_NPOINTS * GTP_POINT_SIZE];
+  FAR struct touch_point_s *point;
+  FAR const uint8_t *p;
   uint8_t status[1];
-  uint8_t status_code;
-  uint8_t touched_points;
-  uint8_t touch[6];
-  uint16_t x;
-  uint16_t y;
-  uint8_t flags;
+  uint16_t down = 0;
+  uint16_t bit;
+  int touched_points;
+  int n = 0;
+  int id;
+  int i;
   int ret;
 
-  /* Erase the Touch Sample and Touch Point */
-
   iinfo("\n");
-  DEBUGASSERT(dev && sample);
-  memset(sample, 0, sizeof(*sample));
+  DEBUGASSERT(dev && sample && maxpoints > 0);
+  memset(sample, 0, SIZEOF_TOUCH_SAMPLE_S(maxpoints));
 
   /* Read the Touch Panel Status */
 
@@ -411,42 +429,70 @@ static int gt9xx_read_touch_data(FAR struct gt9xx_dev_s *dev,
       return ret;
     }
 
-  /* Decode the Status Code and the Touched Points */
+  /* Bit 7 says the coordinates are ready, bits 0-3 how many */
 
-  status_code = status[0] & 0x80;
-  touched_points = status[0] & 0x0f;
-
-  /* If Touch Panel Status is OK and Touched Points is 1 or more */
-
-  if (status_code != 0 && touched_points >= 1)
-    {
-      /* Read the First Touch Point (6 bytes) */
-
-      ret = gt9xx_i2c_read(dev, GTP_POINT1, touch, sizeof(touch));
-      if (ret < 0)
-        {
-          ierr("Read Touch Point failed: %d\n", ret);
-          return ret;
-        }
-
-      /* Decode the Touch Coordinates */
-
-      x = touch[0] + (touch[1] << 8);
-      y = touch[2] + (touch[3] << 8);
-
-      /* Return the Touch Coordinates */
-
-      flags = TOUCH_ID_VALID | TOUCH_POS_VALID;
-      sample->npoints = 1;
-      sample->point[0].id = 0;
-      sample->point[0].x = x;
-      sample->point[0].y = y;
-      sample->point[0].flags = flags;
-    }
-  else if (status_code == 0)
+  if ((status[0] & 0x80) == 0)
     {
       return -EAGAIN;
     }
+
+  touched_points = MIN(status[0] & 0x0f, CONFIG_INPUT_GT9XX_NPOINTS);
+  if (touched_points > 0)
+    {
+      ret = gt9xx_i2c_read(dev, GTP_POINT1, touch,
+                           touched_points * GTP_POINT_SIZE);
+      if (ret < 0)
+        {
+          ierr("Read Touch Points failed: %d\n", ret);
+          return ret;
+        }
+    }
+
+  /* Contacts on the panel: Touch Down if new, Touch Move otherwise */
+
+  for (i = 0; i < touched_points; i++)
+    {
+      p = &touch[i * GTP_POINT_SIZE];
+      id = p[0];
+      if (id >= GTP_MAX_TRACK || (down & (1 << id)) != 0)
+        {
+          continue;
+        }
+
+      bit = 1 << id;
+
+      down |= bit;
+      dev->x[id] = p[1] | (p[2] << 8);
+      dev->y[id] = p[3] | (p[4] << 8);
+
+      if (n < maxpoints)
+        {
+          point = &sample->point[n++];
+          point->id = id;
+          point->x = dev->x[id];
+          point->y = dev->y[id];
+          point->flags = TOUCH_ID_VALID | TOUCH_POS_VALID |
+                         ((dev->down & bit) != 0 ? TOUCH_MOVE : TOUCH_DOWN);
+        }
+    }
+
+  /* Contacts that are gone: Touch Up at their last position */
+
+  for (id = 0; id < GTP_MAX_TRACK && n < maxpoints; id++)
+    {
+      bit = 1 << id;
+      if ((dev->down & bit) != 0 && (down & bit) == 0)
+        {
+          point = &sample->point[n++];
+          point->id = id;
+          point->x = dev->x[id];
+          point->y = dev->y[id];
+          point->flags = TOUCH_ID_VALID | TOUCH_POS_VALID | TOUCH_UP;
+        }
+    }
+
+  dev->down = down;
+  sample->npoints = n;
 
   /* Set the Touch Panel Status to 0 */
 
@@ -457,24 +503,26 @@ static int gt9xx_read_touch_data(FAR struct gt9xx_dev_s *dev,
       return ret;
     }
 
-  return OK;
+  return n > 0 ? OK : -EAGAIN;
 }
 
 /****************************************************************************
  * Name: gt9xx_read
  *
  * Description:
- *   Read a Touch Sample from Touch Panel. Returns either 0 or 1
- *   Touch Points.
+ *   Read a Touch Sample from Touch Panel.  The sample has as many Touch
+ *   Points as fit into buffer, up to CONFIG_INPUT_GT9XX_NPOINTS; a reader
+ *   with room for one point gets the first contact only.
  *
  * Input Parameters:
  *   dev    - Touch Panel Device
- *   buffer - Returned Touch Sample (0 or 1 Touch Points)
+ *   buffer - Returned Touch Sample
  *   buflen - Size of buffer
  *
  * Returned Value:
- *   The number of bytes read on success; -EAGAIN if no touch event is
- *   available; or another negated errno value on failure.
+ *   The number of bytes read, the size of a sample with room for all the
+ *   points read, on success; -EAGAIN if no touch event is available; or
+ *   another negated errno value on failure.
  *
  ****************************************************************************/
 
@@ -483,21 +531,24 @@ static ssize_t gt9xx_read(FAR struct file *filep, FAR char *buffer,
 {
   FAR struct inode *inode;
   FAR struct gt9xx_dev_s *priv;
-  struct touch_sample_s sample;
-  const size_t outlen = sizeof(sample);
+  uint64_t sample[(SIZEOF_TOUCH_SAMPLE_S(CONFIG_INPUT_GT9XX_NPOINTS) + 7) /
+                  8];
   irqstate_t flags;
   bool pending;
+  int maxpoints;
   int ret;
 
-  /* Returned Touch Sample will have 0 or 1 Touch Points */
-
   iinfo("buflen=%ld\n", buflen);
-  if (buflen < outlen)
+  if (buflen < SIZEOF_TOUCH_SAMPLE_S(1))
     {
       ierr("Buffer should be at least %ld bytes, got %ld bytes\n",
-           outlen, buflen);
+           SIZEOF_TOUCH_SAMPLE_S(1), buflen);
       return -EINVAL;
     }
+
+  maxpoints = MIN((buflen - offsetof(struct touch_sample_s, point)) /
+                  sizeof(struct touch_point_s),
+                  CONFIG_INPUT_GT9XX_NPOINTS);
 
   /* Get the Touch Panel Device */
 
@@ -522,7 +573,8 @@ static ssize_t gt9xx_read(FAR struct file *filep, FAR char *buffer,
   priv->int_pending = false;
   leave_critical_section(flags);
 
-  ret = gt9xx_read_touch_data(priv, &sample);
+  ret = gt9xx_read_touch_data(priv, (FAR struct touch_sample_s *)sample,
+                              maxpoints);
   if (ret < 0)
     {
       if (ret != -EAGAIN && pending)
@@ -536,34 +588,8 @@ static ssize_t gt9xx_read(FAR struct file *filep, FAR char *buffer,
       goto out;
     }
 
-  if (sample.npoints >= 1)
-    {
-      sample.point[0].flags |= priv->touched ? TOUCH_MOVE : TOUCH_DOWN;
-      priv->touched = true;
-      priv->x = sample.point[0].x;
-      priv->y = sample.point[0].y;
-      iinfo("touch %s x=%d, y=%d\n",
-            (sample.point[0].flags & TOUCH_MOVE) != 0 ? "move" : "down",
-            priv->x, priv->y);
-    }
-  else if (priv->touched)
-    {
-      sample.npoints = 1;
-      sample.point[0].id = 0;
-      sample.point[0].x = priv->x;
-      sample.point[0].y = priv->y;
-      sample.point[0].flags = TOUCH_UP | TOUCH_ID_VALID | TOUCH_POS_VALID;
-      priv->touched = false;
-      iinfo("touch up x=%d, y=%d\n", priv->x, priv->y);
-    }
-  else
-    {
-      ret = -EAGAIN;
-      goto out;
-    }
-
-  memcpy(buffer, &sample, sizeof(sample));
-  ret = outlen;
+  ret = SIZEOF_TOUCH_SAMPLE_S(maxpoints);
+  memcpy(buffer, sample, ret);
 
 out:
   nxmutex_unlock(&priv->devlock);
@@ -640,7 +666,7 @@ static int gt9xx_open(FAR struct file *filep)
         }
 
       priv->int_pending = false;
-      priv->touched = false;
+      priv->down = 0;
 
       /* Enable Touch Panel Interrupts */
 
@@ -755,7 +781,7 @@ static int gt9xx_ioctl(FAR struct file *filep, int cmd, unsigned long arg)
               return -EINVAL;
             }
 
-          *maxpoints = 1;
+          *maxpoints = CONFIG_INPUT_GT9XX_NPOINTS;
           return OK;
         }
 

@@ -636,6 +636,15 @@ config INPUT_GT9XX_I2C_FREQUENCY
 	---help---
 		I2C frequency in Hz
 
+config INPUT_GT9XX_NPOINTS
+	int "Number of touch points"
+	default 5
+	range 1 10
+	---help---
+		Maximum number of touch points reported at once.  The GT9xx
+		controllers track up to 5 or 10 contacts, depending on the model.
+		A reader with room for one point only gets the first contact.
+
 endif # INPUT_GT9XX
 
 config INPUT_BUTTONS
